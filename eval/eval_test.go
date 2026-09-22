@@ -22,7 +22,7 @@ func TestMaterial(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := Evaluate(pos); got != tc.want {
+		if got := Material(pos); got != tc.want {
 			t.Errorf("%s: %d, esperado %d", tc.name, got, tc.want)
 		}
 	}
