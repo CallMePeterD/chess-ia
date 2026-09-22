@@ -6,8 +6,7 @@ package eval
 
 import "github.com/CallMePeterD/chess-ia/rules"
 
-// PieceValue é o valor material de cada tipo de peça (v1 — material).
-// O rei vale 0: nunca sai do tabuleiro, então não entra na soma.
+// PieceValue é o valor material de cada tipo de peça.
 var PieceValue = [...]int{
 	rules.NoPiece: 0,
 	rules.Pawn:    100,
@@ -18,20 +17,110 @@ var PieceValue = [...]int{
 	rules.King:    0,
 }
 
-// Evaluate devolve a avaliação da posição (brancas − pretas).
-func Evaluate(p rules.Position) int {
-	return Material(p)
+// Matrizes de posicionamento (PST). Mapeiam as 64 casas (0 a 63).
+// Valores ajustados para incentivar domínio do centro e desenvolvimento seguro.
+// A visão visual destas tabelas assume que o índice 0 (A1) está no topo esquerdo.
+// Como o Xadrez padrão trata A1 como canto inferior, usamos índices diretos.
+
+var pstPawn = [64]int{
+	0, 0, 0, 0, 0, 0, 0, 0,
+	5, 10, 10, -20, -20, 10, 10, 5,
+	5, -5, -10, 0, 0, -10, -5, 5,
+	0, 0, 0, 20, 20, 0, 0, 0,
+	5, 5, 10, 25, 25, 10, 5, 5,
+	10, 10, 20, 30, 30, 20, 10, 10,
+	50, 50, 50, 50, 50, 50, 50, 50,
+	0, 0, 0, 0, 0, 0, 0, 0,
 }
 
-// Material soma o valor das peças, brancas − pretas.
-func Material(p rules.Position) int {
+var pstKnight = [64]int{
+	-50, -40, -30, -30, -30, -30, -40, -50,
+	-40, -20, 0, 0, 0, 0, -20, -40,
+	-30, 0, 10, 15, 15, 10, 0, -30,
+	-30, 5, 15, 20, 20, 15, 5, -30,
+	-30, 0, 15, 20, 20, 15, 0, -30,
+	-30, 5, 10, 15, 15, 10, 5, -30,
+	-40, -20, 0, 5, 5, 0, -20, -40,
+	-50, -40, -30, -30, -30, -30, -40, -50,
+}
+
+var pstBishop = [64]int{
+	-20, -10, -10, -10, -10, -10, -10, -20,
+	-10, 5, 0, 0, 0, 0, 5, -10,
+	-10, 10, 10, 10, 10, 10, 10, -10,
+	-10, 0, 10, 10, 10, 10, 0, -10,
+	-10, 5, 5, 10, 10, 5, 5, -10,
+	-10, 0, 5, 10, 10, 5, 0, -10,
+	-10, 0, 0, 0, 0, 0, 0, -10,
+	-20, -10, -10, -10, -10, -10, -10, -20,
+}
+
+var pstRook = [64]int{
+	0, 0, 0, 5, 5, 0, 0, 0,
+	-5, 0, 0, 0, 0, 0, 0, -5,
+	-5, 0, 0, 0, 0, 0, 0, -5,
+	-5, 0, 0, 0, 0, 0, 0, -5,
+	-5, 0, 0, 0, 0, 0, 0, -5,
+	-5, 0, 0, 0, 0, 0, 0, -5,
+	5, 10, 10, 10, 10, 10, 10, 5,
+	0, 0, 0, 0, 0, 0, 0, 0,
+}
+
+var pstQueen = [64]int{
+	-20, -10, -10, -5, -5, -10, -10, -20,
+	-10, 0, 0, 0, 0, 0, 0, -10,
+	-10, 0, 5, 5, 5, 5, 0, -10,
+	-5, 0, 5, 5, 5, 5, 0, -5,
+	0, 0, 5, 5, 5, 5, 0, -5,
+	-10, 5, 5, 5, 5, 5, 0, -10,
+	-10, 0, 5, 0, 0, 0, 0, -10,
+	-20, -10, -10, -5, -5, -10, -10, -20,
+}
+
+var pstKing = [64]int{
+	20, 30, 10, 0, 0, 10, 30, 20,
+	20, 20, 0, 0, 0, 0, 20, 20,
+	-10, -20, -20, -20, -20, -20, -20, -10,
+	-20, -30, -30, -40, -40, -30, -30, -20,
+	-30, -40, -40, -50, -50, -40, -40, -30,
+	-30, -40, -40, -50, -50, -40, -40, -30,
+	-30, -40, -40, -50, -50, -40, -40, -30,
+	-30, -40, -40, -50, -50, -40, -40, -30,
+}
+
+// pstMapping conecta o tipo da peça à sua tabela correspondente
+var pstMapping = [...]*[64]int{
+	rules.NoPiece: nil,
+	rules.Pawn:    &pstPawn,
+	rules.Knight:  &pstKnight,
+	rules.Bishop:  &pstBishop,
+	rules.Rook:    &pstRook,
+	rules.Queen:   &pstQueen,
+	rules.King:    &pstKing,
+}
+
+// Evaluate devolve a avaliação da posição combinando material e posicionamento (brancas − pretas).
+func Evaluate(p rules.Position) int {
 	score := 0
 	for _, pc := range p.Pieces() {
-		v := PieceValue[pc.Type]
+		val := PieceValue[pc.Type]
+
+		// Busca o bônus de posição
+		pstBonus := 0
+		if table := pstMapping[pc.Type]; table != nil {
+			sq := pc.Square
+			// As tabelas são otimizadas para as Brancas.
+			// Para as Pretas, espelhamos o tabuleiro verticalmente (flip)
+			if pc.Color == rules.Black {
+				sq = sq ^ 56
+			}
+			pstBonus = table[sq]
+		}
+
 		if pc.Color == rules.White {
-			score += v
+			score += val + pstBonus
 		} else {
-			score -= v
+			score -= (val + pstBonus)
 		}
 	}
 	return score
