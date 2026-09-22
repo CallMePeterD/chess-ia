@@ -99,28 +99,37 @@ var pstMapping = [...]*[64]int{
 	rules.King:    &pstKing,
 }
 
-// Evaluate devolve a avaliação da posição combinando material e posicionamento (brancas − pretas).
-func Evaluate(p rules.Position) int {
+// Material soma apenas o valor bruto das peças, brancas − pretas.
+func Material(p rules.Position) int {
 	score := 0
 	for _, pc := range p.Pieces() {
-		val := PieceValue[pc.Type]
+		v := PieceValue[pc.Type]
+		if pc.Color == rules.White {
+			score += v
+		} else {
+			score -= v
+		}
+	}
+	return score
+}
 
-		// Busca o bônus de posição
-		pstBonus := 0
+// Evaluate devolve a avaliação combinada (Material + Posicionamento).
+func Evaluate(p rules.Position) int {
+	score := Material(p)
+
+	// Adiciona os bônus das Piece-Square Tables (PST)
+	for _, pc := range p.Pieces() {
 		if table := pstMapping[pc.Type]; table != nil {
 			sq := pc.Square
-			// As tabelas são otimizadas para as Brancas.
-			// Para as Pretas, espelhamos o tabuleiro verticalmente (flip)
 			if pc.Color == rules.Black {
-				sq = sq ^ 56
+				sq = sq ^ 56 // Espelha o índice da casa para as Pretas
 			}
-			pstBonus = table[sq]
-		}
-
-		if pc.Color == rules.White {
-			score += val + pstBonus
-		} else {
-			score -= (val + pstBonus)
+			
+			if pc.Color == rules.White {
+				score += table[sq]
+			} else {
+				score -= table[sq]
+			}
 		}
 	}
 	return score
