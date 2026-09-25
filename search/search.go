@@ -1,34 +1,34 @@
 // Package search escolhe o lance: minimax de profundidade fixa sobre a
-// avaliação de eval, agora otimizado com poda alfa-beta.
+// avaliação de eval, com poda alfa-beta, ordenação de lances e busca de quiescência.
 package search
 
 import (
 	"errors"
 	"fmt"
+	"sort"
+	"math/rand"
 
 	"github.com/CallMePeterD/chess-ia/eval"
 	"github.com/CallMePeterD/chess-ia/rules"
 )
 
-// MateScore é a pontuação de um xeque-mate. Mates mais próximos valem mais
-// (MateScore − ply), para a IA preferir o mate mais rápido e adiar o que sofre.
+// MateScore é a pontuação de um xeque-mate. Mates mais próximos valem mais.
 const MateScore = 100000
 
-// InfScore representa o infinito (um valor fora do alcance de qualquer pontuação real)
-// usado para inicializar os limites alfa e beta.
+// InfScore representa o infinito para os limites da janela alfa-beta.
 const InfScore = 1000000
 
-// ErrNoMoves indica que a posição não tem lances legais (partida encerrada).
+// ErrNoMoves indica que a posição não tem lances legais.
 var ErrNoMoves = errors.New("posição sem lances legais")
 
 // Result é o resultado de uma busca.
 type Result struct {
 	Move  rules.Move
-	Score int   // centipeões, ponto de vista das brancas
-	Nodes int64 // posições visitadas
+	Score int
+	Nodes int64
 }
 
-// DepthFor mapeia a dificuldade do contrato para a profundidade da busca.
+// DepthFor mapeia a dificuldade para a profundidade da busca.
 func DepthFor(dificuldade string) (int, error) {
 	switch dificuldade {
 	case "facil":
@@ -41,75 +41,227 @@ func DepthFor(dificuldade string) (int, error) {
 	return 0, fmt.Errorf("dificuldade desconhecida %q", dificuldade)
 }
 
-// Minimax busca até a profundidade dada usando Poda Alfa-Beta e devolve o melhor
-// lance para quem joga. Em empate de pontuação fica o primeiro lance encontrado.
-func Minimax(p rules.Position, depth int) (Result, error) {
-	if depth < 1 {
-		return Result{}, fmt.Errorf("profundidade inválida %d", depth)
+// MultiPVFor mapeia a dificuldade para a quantidade de lances avaliados na raiz (simulando erro).
+func MultiPVFor(dificuldade string) (int, error) {
+	switch dificuldade {
+	case "facil":
+		return 3, nil // Avalia as 3 melhores opções e sorteia uma
+	case "media":
+		return 2, nil // Avalia as 2 melhores e sorteia
+	case "dificil":
+		return 1, nil // Joga sempre o melhor lance possível
+	case "":
+		return 1, nil // Fallback se testado sem dificuldade definida
 	}
-	moves := p.LegalMoves()
+	return 0, fmt.Errorf("dificuldade desconhecida %q", dificuldade)
+}
+
+// Adicionamos a TT na struct do searcher
+type searcher struct {
+	nodes int64
+	tt    *TT
+}
+
+// Minimax inicia a busca com Poda Alfa-Beta, Iterative Deepening e Multi-PV.
+func Minimax(p rules.Position, maxDepth int, multiPV int) (Result, error) {
+	if maxDepth < 1 {
+		return Result{}, fmt.Errorf("profundidade inválida %d", maxDepth)
+	}
+	moves := p.ValidMoves()
 	if len(moves) == 0 {
 		return Result{}, ErrNoMoves
 	}
 
-	s := &searcher{}
-	maximizing := p.SideToMove() == rules.White
-	best := Result{Move: moves[0]}
+	s := &searcher{tt: NewTT(32)}
 
-	// Inicializamos os limites da janela de busca
-	alpha := -InfScore
-	beta := InfScore
+	// Garante que não tentamos encontrar mais lances do que os fisicamente possíveis no tabuleiro
+	targetPV := multiPV
+	if targetPV > len(moves) {
+		targetPV = len(moves)
+	}
 
-	for i, mv := range moves {
-		score := s.alphaBeta(p.Apply(mv), depth-1, 1, alpha, beta)
-		if i == 0 || (maximizing && score > best.Score) || (!maximizing && score < best.Score) {
-			best.Move, best.Score = mv, score
+	var finalResults []Result
+
+	for d := 1; d <= maxDepth; d++ {
+		finalResults = make([]Result, 0, targetPV)
+		excluded := make(map[string]bool)
+
+		// Loop do Multi-PV: corre a busca targetPV vezes
+		for n := 0; n < targetPV; n++ {
+			var hashMove rules.Move
+			if _, ttMove, ok := s.tt.Probe(p.Hash(), 0, -InfScore, InfScore); ok || ttMove.UCI() != "" {
+				hashMove = ttMove
+			}
+
+			orderMoves(moves, hashMove)
+
+			maximizing := p.SideToMove == rules.White
+			bestScore := -InfScore
+			if !maximizing { bestScore = InfScore }
+			
+			var bestMove rules.Move
+			hasValidMove := false
+			alpha := -InfScore
+			beta := InfScore
+
+			for _, mv := range moves {
+				if excluded[mv.UCI()] {
+					continue // Ignora o lance se ele já faz parte do nosso "Top N"
+				}
+				hasValidMove = true
+
+				score := s.alphaBeta(p.Apply(mv), d-1, 1, alpha, beta)
+
+				if maximizing {
+					if score > bestScore || bestScore == -InfScore {
+						bestScore = score
+						bestMove = mv
+					}
+					if score > alpha { alpha = score }
+				} else {
+					if score < bestScore || bestScore == InfScore {
+						bestScore = score
+						bestMove = mv
+					}
+					if score < beta { beta = score }
+				}
+			}
+
+			if hasValidMove {
+				excluded[bestMove.UCI()] = true
+				finalResults = append(finalResults, Result{Move: bestMove, Score: bestScore, Nodes: s.nodes})
+			}
 		}
 
-		// Atualizamos a janela na raiz da árvore
-		if maximizing {
-			if score > alpha {
-				alpha = score
-			}
-		} else {
-			if score < beta {
-				beta = score
-			}
+		// Otimização: Se o lance primário já garante Mate, aborta o aprofundamento e joga logo
+		bestOverall := finalResults[0]
+		if bestOverall.Score > MateScore-100 || bestOverall.Score < -MateScore+100 {
+			break
 		}
 	}
-	best.Nodes = s.nodes
-	return best, nil
-}
 
-type searcher struct {
-	nodes int64
-}
+	// O segredo do Nerf: Sorteia aleatoriamente um lance entre o Top N
+	// EXCEÇÃO: Se o melhor lance absoluto for um Xeque-Mate, 
+	// a IA recusa-se a sortear lances inferiores e joga com 100% de precisão.
+	if len(finalResults) > 0 {
+		if finalResults[0].Score > MateScore-100 || finalResults[0].Score < -MateScore+100 {
+			return finalResults[0], nil
+		}
+	}
 
-// alphaBeta devolve a pontuação (visão das brancas) de p explorando mais depth
-// plies. O algoritmo corta ramos inúteis da árvore quando beta <= alpha.
+	pickedIndex := rand.Intn(len(finalResults))
+	return finalResults[pickedIndex], nil
+}
+	
+
+
+// alphaBeta agora utiliza o lance da memória (ttMove) para ordenar os caminhos
 func (s *searcher) alphaBeta(p rules.Position, depth, ply, alpha, beta int) int {
+	originalAlpha := alpha
+
+	hash := p.Hash()
+	// Trazemos a variável ttMove de volta à vida
+	ttScore, ttMove, ok := s.tt.Probe(hash, depth, alpha, beta)
+	if ok {
+		return ttScore 
+	}
+
 	s.nodes++
-	moves := p.LegalMoves()
+	moves := p.ValidMoves()
+
 	if len(moves) == 0 {
-		if p.Status() == rules.Checkmate {
-			// Quem está para jogar levou mate.
-			if p.SideToMove() == rules.White {
+		// Se não há lances válidos e o Rei está em xeque, é Xeque-Mate
+		if p.InCheck(p.SideToMove) {
+			if p.SideToMove == rules.White {
 				return -(MateScore - ply)
 			}
 			return MateScore - ply
 		}
-		return 0 // afogamento
-	}
-	if depth == 0 {
-		return eval.Evaluate(p)
+		// Se não há lances mas não há xeque, é Afogamento (Stalemate)
+		return 0 
 	}
 
-	maximizing := p.SideToMove() == rules.White
+	if depth == 0 {
+		return s.quiescence(p, alpha, beta)
+	}
+
+	// O segredo: Passamos o lance da memória para ser o primeiro a ser testado
+	orderMoves(moves, ttMove)
+
+	maximizing := p.SideToMove == rules.White
+	bestScore := -InfScore
+	if !maximizing { bestScore = InfScore }
+	
+	var bestMove rules.Move
+
+	for _, mv := range moves {
+		var score int
+		if maximizing {
+			score = s.alphaBeta(p.Apply(mv), depth-1, ply+1, alpha, beta)
+			if score > bestScore {
+				bestScore = score
+				bestMove = mv
+			}
+			if bestScore > alpha { alpha = bestScore }
+			if beta <= alpha { break }
+		} else {
+			score = s.alphaBeta(p.Apply(mv), depth-1, ply+1, alpha, beta)
+			if score < bestScore {
+				bestScore = score
+				bestMove = mv
+			}
+			if bestScore < beta { beta = bestScore }
+			if beta <= alpha { break }
+		}
+	}
+
+	flag := FlagExact
+	if bestScore <= originalAlpha {
+		flag = FlagUpperBound
+	} else if bestScore >= beta {
+		flag = FlagLowerBound
+	}
+	s.tt.Store(hash, depth, bestScore, flag, bestMove)
+
+	return bestScore
+}
+
+// quiescence continua a busca além da profundidade limite, avaliando apenas capturas.
+func (s *searcher) quiescence(p rules.Position, alpha, beta int) int {
+	s.nodes++
+	standPat := eval.Evaluate(p) // Avaliação da posição "como está" (Stand Pat)
+
+	maximizing := p.SideToMove == rules.White
+
+	// Tenta cortar a busca imediatamente se a posição estática já for muito boa para o jogador
+	if maximizing {
+		if standPat >= beta {
+			return beta
+		}
+		if standPat > alpha {
+			alpha = standPat
+		}
+	} else {
+		if standPat <= alpha {
+			return alpha
+		}
+		if standPat < beta {
+			beta = standPat
+		}
+	}
+
+	moves := p.ValidMoves()
+	orderMoves(moves, 0)
 
 	if maximizing {
-		best := -InfScore
+		best := standPat
 		for _, mv := range moves {
-			score := s.alphaBeta(p.Apply(mv), depth-1, ply+1, alpha, beta)
+			// Na quiescência, só nos importamos com lances instáveis (capturas ou promoções)
+			if !mv.IsCapture() && !mv.IsPromotion() {
+				continue
+			}
+
+			score := s.quiescence(p.Apply(mv), alpha, beta)
 			if score > best {
 				best = score
 			}
@@ -117,14 +269,18 @@ func (s *searcher) alphaBeta(p rules.Position, depth, ply, alpha, beta int) int 
 				alpha = best
 			}
 			if beta <= alpha {
-				break // Poda Beta: o oponente já tem uma opção melhor no ramo anterior, corta a busca
+				break
 			}
 		}
 		return best
 	} else {
-		best := InfScore
+		best := standPat
 		for _, mv := range moves {
-			score := s.alphaBeta(p.Apply(mv), depth-1, ply+1, alpha, beta)
+			if !mv.IsCapture() && !mv.IsPromotion() {
+				continue
+			}
+
+			score := s.quiescence(p.Apply(mv), alpha, beta)
 			if score < best {
 				best = score
 			}
@@ -132,9 +288,31 @@ func (s *searcher) alphaBeta(p rules.Position, depth, ply, alpha, beta int) int 
 				beta = best
 			}
 			if beta <= alpha {
-				break // Poda Alfa: nós (brancas) já temos uma opção melhor no ramo anterior, corta a busca
+				break
 			}
 		}
 		return best
 	}
+}
+
+// orderMoves agora recebe o lance da memória para dar prioridade máxima
+func orderMoves(moves []rules.Move, hashMove rules.Move) {
+	sort.Slice(moves, func(i, j int) bool {
+		return scoreMove(moves[i], hashMove) > scoreMove(moves[j], hashMove)
+	})
+}
+
+// scoreMove atribui 10.000 pontos ao lance da Hash, garantindo que seja o índice 0
+func scoreMove(mv rules.Move, hashMove rules.Move) int {
+	if hashMove.UCI() != "" && mv.UCI() == hashMove.UCI() {
+		return 10000 // Prioridade máxima absoluta: já sabemos que este lance é forte
+	}
+	score := 0
+	if mv.IsCapture() {
+		score += 10
+	}
+	if mv.IsPromotion() {
+		score += 5
+	}
+	return score
 }

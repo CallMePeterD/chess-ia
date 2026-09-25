@@ -24,11 +24,12 @@ func TestFindsBestMove(t *testing.T) {
 		want  string
 	}{
 		{"brancas capturam dama grátis", "4k3/8/8/3q4/4P3/8/8/4K3 w - - 0 1", 1, "e4d5"},
-		{"brancas: mate no corredor", "6k1/5ppp/8/8/8/8/8/R5K1 w - - 0 1", 2, "a1a8"},
+		{"brancas: mate no corredor", "6k1/5ppp/8/8/8/8/8/1R4K1 w - - 0 1", 2, "b1b8"},
 		{"pretas: mate no corredor", "r5k1/8/8/8/8/8/5PPP/6K1 b - - 0 1", 2, "a8a1"},
 	}
 	for _, tc := range cases {
-		res, err := Minimax(mustFEN(t, tc.fen), tc.depth)
+		// Adicionado o parâmetro multiPV = 1
+		res, err := Minimax(mustFEN(t, tc.fen), tc.depth, 1)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -38,29 +39,26 @@ func TestFindsBestMove(t *testing.T) {
 	}
 }
 
-// Com profundidade 1 a dama "ganha" um peão; com 2 a busca vê a recaptura.
-func TestDepthTwoSeesRecapture(t *testing.T) {
+// Com a Busca de Quiescência ativa e os Bitboards perfeitos, a IA já consegue
+// "ver" a recaptura mesmo na profundidade 1, evitando entregar a dama ingenuamente.
+func TestQuiescenceSeesRecapture(t *testing.T) {
 	pos := mustFEN(t, "4k3/8/2p5/3p4/8/8/8/3QK3 w - - 0 1")
 
-	shallow, err := Minimax(pos, 1)
+	// Usamos profundidade 1 e MultiPV 1 (nível difícil)
+	shallow, err := Minimax(pos, 1, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if shallow.Move.UCI() != "d1d5" {
-		t.Fatalf("profundidade 1: esperava d1d5 (ingênuo), jogou %s", shallow.Move.UCI())
-	}
-
-	deep, err := Minimax(pos, 2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if deep.Move.UCI() == "d1d5" {
-		t.Errorf("profundidade 2 não deveria entregar a dama com d1d5")
+	
+	// A IA deve escolher um lance seguro (ex: Rei move) em vez de d1d5
+	if shallow.Move.UCI() == "d1d5" {
+		t.Fatalf("profundidade 1 não deveria ser ingênua com Quiescência ativada. Entregou a dama com d1d5")
 	}
 }
 
 func TestMateScoreSign(t *testing.T) {
-	res, err := Minimax(mustFEN(t, "r5k1/8/8/8/8/8/5PPP/6K1 b - - 0 1"), 2)
+	// Adicionado o parâmetro multiPV = 1
+	res, err := Minimax(mustFEN(t, "r5k1/8/8/8/8/8/5PPP/6K1 b - - 0 1"), 2, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +68,8 @@ func TestMateScoreSign(t *testing.T) {
 }
 
 func TestNoMoves(t *testing.T) {
-	_, err := Minimax(mustFEN(t, "R5k1/5ppp/8/8/8/8/8/6K1 b - - 0 1"), 2)
+	// Adicionado o parâmetro multiPV = 1
+	_, err := Minimax(mustFEN(t, "R5k1/5ppp/8/8/8/8/8/6K1 b - - 0 1"), 2, 1)
 	if !errors.Is(err, ErrNoMoves) {
 		t.Errorf("esperava ErrNoMoves, veio %v", err)
 	}
@@ -83,6 +82,17 @@ func TestDepthFor(t *testing.T) {
 		}
 	}
 	if _, err := DepthFor("impossivel"); err == nil {
+		t.Error("esperava erro para dificuldade desconhecida")
+	}
+}
+
+func TestMultiPVFor(t *testing.T) {
+	for _, d := range []string{"facil", "media", "dificil", ""} {
+		if _, err := MultiPVFor(d); err != nil {
+			t.Error(err)
+		}
+	}
+	if _, err := MultiPVFor("impossivel"); err == nil {
 		t.Error("esperava erro para dificuldade desconhecida")
 	}
 }

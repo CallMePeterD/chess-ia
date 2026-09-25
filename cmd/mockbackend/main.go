@@ -52,17 +52,31 @@ func main() {
 		if !*selfplay {
 			return
 		}
+		
 		pos, _ := rules.FromFEN(job.FEN)
-		mv, _ := pos.ParseUCI(res.Move) // o mock já validou o lance
+		
+		// Converte a string UCI para a nossa struct Move de 16 bits
+		var mv rules.Move
+		for _, m := range pos.ValidMoves() {
+			if m.UCI() == res.Move {
+				mv = m
+				break
+			}
+		}
+
 		next := pos.Apply(mv)
-		switch {
-		case next.Status() == rules.Checkmate:
-			log.Printf("xeque-mate! fen final: %s", next.FEN())
-		case next.Status() == rules.Stalemate:
-			log.Printf("afogamento. fen final: %s", next.FEN())
-		case plies.Add(1) >= int64(*maxPlies):
+		validMoves := next.ValidMoves()
+
+		// Verifica o final do jogo da mesma forma que a nossa Poda Alfa-Beta
+		if len(validMoves) == 0 {
+			if next.InCheck(next.SideToMove) {
+				log.Printf("xeque-mate! fen final: %s", next.FEN())
+			} else {
+				log.Printf("afogamento. fen final: %s", next.FEN())
+			}
+		} else if plies.Add(1) >= int64(*maxPlies) {
 			log.Printf("limite de %d meios-lances. fen final: %s", *maxPlies, next.FEN())
-		default:
+		} else {
 			m.Enqueue(newJob(job.GameID, next.FEN()))
 		}
 	}

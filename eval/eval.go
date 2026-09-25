@@ -4,7 +4,11 @@
 // brancas: positivo é bom para as brancas, negativo para as pretas.
 package eval
 
-import "github.com/CallMePeterD/chess-ia/rules"
+import (
+	"math/bits"
+
+	"github.com/CallMePeterD/chess-ia/rules"
+)
 
 // PieceValue é o valor material de cada tipo de peça.
 var PieceValue = [...]int{
@@ -100,37 +104,53 @@ var pstMapping = [...]*[64]int{
 }
 
 // Material soma apenas o valor bruto das peças, brancas − pretas.
+// Com Bitboards, basta contar os bits '1' ativos para cada tipo de peça.
 func Material(p rules.Position) int {
 	score := 0
-	for _, pc := range p.Pieces() {
-		v := PieceValue[pc.Type]
-		if pc.Color == rules.White {
-			score += v
-		} else {
-			score -= v
-		}
+	for pt := rules.Pawn; pt <= rules.King; pt++ {
+		wCount := bits.OnesCount64(uint64(p.Pieces[pt] & p.Colors[rules.White]))
+		bCount := bits.OnesCount64(uint64(p.Pieces[pt] & p.Colors[rules.Black]))
+		
+		score += (wCount - bCount) * PieceValue[pt]
 	}
 	return score
 }
 
 // Evaluate devolve a avaliação combinada (Material + Posicionamento).
 func Evaluate(p rules.Position) int {
-	score := Material(p)
+	score := 0
 
-	// Adiciona os bônus das Piece-Square Tables (PST)
-	for _, pc := range p.Pieces() {
-		if table := pstMapping[pc.Type]; table != nil {
-			sq := pc.Square
-			if pc.Color == rules.Black {
-				sq = sq ^ 56 // Espelha o índice da casa para as Pretas
+	for pt := rules.Pawn; pt <= rules.King; pt++ {
+		val := PieceValue[pt]
+		table := pstMapping[pt]
+
+		// Avalia as peças Brancas
+		whitePieces := p.Pieces[pt] & p.Colors[rules.White]
+		for whitePieces != 0 {
+			sq := bits.TrailingZeros64(uint64(whitePieces)) // Acha a casa exata
+			
+			score += val
+			if table != nil {
+				score += table[sq]
 			}
 			
-			if pc.Color == rules.White {
-				score += table[sq]
-			} else {
-				score -= table[sq]
+			whitePieces &= whitePieces - 1 // Desliga o bit processado
+		}
+
+		// Avalia as peças Pretas
+		blackPieces := p.Pieces[pt] & p.Colors[rules.Black]
+		for blackPieces != 0 {
+			sq := bits.TrailingZeros64(uint64(blackPieces)) 
+			
+			score -= val
+			if table != nil {
+				score -= table[sq^56] // Espelha o índice da casa para as Pretas
 			}
+			
+			blackPieces &= blackPieces - 1 
 		}
 	}
+
+	// A pontuação continua sempre do ponto de vista das Brancas
 	return score
 }

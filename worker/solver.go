@@ -17,7 +17,13 @@ func SearchSolver(_ context.Context, job Job) (string, int, error) {
 	if err != nil {
 		return "", 0, err
 	}
-	res, err := search.Minimax(pos, depth)
+	multiPV, err := search.MultiPVFor(job.Dificuldade)
+	if err != nil {
+		return "", 0, err
+	}
+
+	// Adicionada a variável multiPV na chamada
+	res, err := search.Minimax(pos, depth, multiPV)
 	if err != nil {
 		return "", 0, err
 	}

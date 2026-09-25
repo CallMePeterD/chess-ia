@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"errors"
 
 	"github.com/CallMePeterD/chess-ia/rules"
 	"github.com/CallMePeterD/chess-ia/worker"
@@ -89,7 +90,17 @@ func (s *Server) result(w http.ResponseWriter, r *http.Request) {
 	}
 	pos, err := rules.FromFEN(job.FEN)
 	if err == nil {
-		_, err = pos.ParseUCI(strings.TrimSpace(res.Move))
+		moveStr := strings.TrimSpace(res.Move)
+		valid := false
+		for _, m := range pos.ValidMoves() {
+			if m.UCI() == moveStr {
+				valid = true
+				break
+			}
+		}
+		if !valid {
+			err = errors.New("lance ilegal ou formato UCI inválido")
+		}
 	}
 	if err != nil {
 		s.mu.Unlock()

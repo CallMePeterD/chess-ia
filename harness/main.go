@@ -44,8 +44,13 @@ func run(fen string, depth int, dificuldade string, perft int) error {
 		return nil
 	}
 
+	multiPV := 1
 	if dificuldade != "" {
+		var err error
 		if depth, err = search.DepthFor(dificuldade); err != nil {
+			return err
+		}
+		if multiPV, err = search.MultiPVFor(dificuldade); err != nil {
 			return err
 		}
 	}
@@ -54,7 +59,7 @@ func run(fen string, depth int, dificuldade string, perft int) error {
 	fmt.Printf("avaliação:  %d (estática)\n", eval.Evaluate(pos))
 
 	start := time.Now()
-	res, err := search.Minimax(pos, depth)
+	res, err := search.Minimax(pos, depth, multiPV)
 	if err != nil {
 		return err
 	}
