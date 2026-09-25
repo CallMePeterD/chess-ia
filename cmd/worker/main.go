@@ -8,17 +8,26 @@ import (
 	"errors"
 	"flag"
 	"log"
+	"fmt"
 	"os"
 	"os/signal"
 	"time"
 
 	"github.com/CallMePeterD/chess-ia/worker"
+	"github.com/CallMePeterD/chess-ia/book"
+	"github.com/CallMePeterD/chess-ia/search"
 )
 
 func main() {
 	backend := flag.String("backend", envOr("IA_BACKEND_URL", "http://localhost:8080"), "URL base do backend")
 	interval := flag.Duration("interval", 750*time.Millisecond, "intervalo de polling quando não há trabalho")
 	flag.Parse()
+	var err error
+
+	search.OpeningBook, err = book.Open("book.bin")
+	if err != nil {
+		fmt.Println("Aviso: Livro de aberturas não encontrado. A jogar sem teoria inicial.")
+	}
 
 	token := os.Getenv("IA_TOKEN")
 	if token == "" {
@@ -30,7 +39,7 @@ func main() {
 
 	logger := log.New(os.Stderr, "[ia] ", log.LstdFlags)
 	logger.Printf("conectando em %s", *backend)
-	err := worker.Run(ctx, worker.NewClient(*backend, token), worker.SearchSolver,
+	err = worker.Run(ctx, worker.NewClient(*backend, token), worker.SearchSolver,
 		worker.Config{PollInterval: *interval, Logger: logger})
 	if errors.Is(err, worker.ErrUnauthorized) {
 		logger.Fatal("token recusado pelo backend; confira IA_TOKEN")

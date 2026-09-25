@@ -1,6 +1,7 @@
 package search
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -29,7 +30,7 @@ func TestFindsBestMove(t *testing.T) {
 	}
 	for _, tc := range cases {
 		// Adicionado o parâmetro multiPV = 1
-		res, err := Minimax(mustFEN(t, tc.fen), tc.depth, 1)
+		res, err := Minimax(context.Background(),mustFEN(t, tc.fen), tc.depth, 1)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -45,7 +46,7 @@ func TestQuiescenceSeesRecapture(t *testing.T) {
 	pos := mustFEN(t, "4k3/8/2p5/3p4/8/8/8/3QK3 w - - 0 1")
 
 	// Usamos profundidade 1 e MultiPV 1 (nível difícil)
-	shallow, err := Minimax(pos, 1, 1)
+	shallow, err := Minimax(context.Background(),pos, 1, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +59,7 @@ func TestQuiescenceSeesRecapture(t *testing.T) {
 
 func TestMateScoreSign(t *testing.T) {
 	// Adicionado o parâmetro multiPV = 1
-	res, err := Minimax(mustFEN(t, "r5k1/8/8/8/8/8/5PPP/6K1 b - - 0 1"), 2, 1)
+	res, err := Minimax(context.Background(),mustFEN(t, "r5k1/8/8/8/8/8/5PPP/6K1 b - - 0 1"), 2, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +70,7 @@ func TestMateScoreSign(t *testing.T) {
 
 func TestNoMoves(t *testing.T) {
 	// Adicionado o parâmetro multiPV = 1
-	_, err := Minimax(mustFEN(t, "R5k1/5ppp/8/8/8/8/8/6K1 b - - 0 1"), 2, 1)
+	_, err := Minimax(context.Background(),mustFEN(t, "R5k1/5ppp/8/8/8/8/8/6K1 b - - 0 1"), 2, 1)
 	if !errors.Is(err, ErrNoMoves) {
 		t.Errorf("esperava ErrNoMoves, veio %v", err)
 	}

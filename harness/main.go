@@ -6,6 +6,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -14,6 +15,8 @@ import (
 	"github.com/CallMePeterD/chess-ia/eval"
 	"github.com/CallMePeterD/chess-ia/rules"
 	"github.com/CallMePeterD/chess-ia/search"
+	"github.com/CallMePeterD/chess-ia/book"
+
 )
 
 func main() {
@@ -22,6 +25,12 @@ func main() {
 	dificuldade := flag.String("dificuldade", "", "facil | media | dificil")
 	perft := flag.Int("perft", 0, "em vez de buscar, roda perft até esta profundidade")
 	flag.Parse()
+
+	var err error
+	search.OpeningBook, err = book.Open("book.bin")
+	if err != nil {
+		fmt.Println("Aviso: Livro de aberturas não encontrado. A jogar sem teoria inicial.")
+	}
 
 	if err := run(*fen, *depth, *dificuldade, *perft); err != nil {
 		fmt.Fprintln(os.Stderr, "erro:", err)
@@ -59,7 +68,7 @@ func run(fen string, depth int, dificuldade string, perft int) error {
 	fmt.Printf("avaliação:  %d (estática)\n", eval.Evaluate(pos))
 
 	start := time.Now()
-	res, err := search.Minimax(pos, depth, multiPV)
+	res, err := search.Minimax(context.Background(),pos, depth, multiPV)
 	if err != nil {
 		return err
 	}
