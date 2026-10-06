@@ -38,12 +38,18 @@ func FromFEN(fen string) (Position, error) {
 
 		var pt PieceType
 		switch strings.ToLower(string(char)) {
-		case "p": pt = Pawn
-		case "n": pt = Knight
-		case "b": pt = Bishop
-		case "r": pt = Rook
-		case "q": pt = Queen
-		case "k": pt = King
+		case "p":
+			pt = Pawn
+		case "n":
+			pt = Knight
+		case "b":
+			pt = Bishop
+		case "r":
+			pt = Rook
+		case "q":
+			pt = Queen
+		case "k":
+			pt = King
 		default:
 			return p, errors.New("peça inválida detetada no FEN")
 		}
@@ -64,10 +70,18 @@ func FromFEN(fen string) (Position, error) {
 	// 3. Direitos de Roque (Castling)
 	p.Castling = 0
 	if parts[2] != "-" {
-		if strings.ContainsRune(parts[2], 'K') { p.Castling |= 1 }
-		if strings.ContainsRune(parts[2], 'Q') { p.Castling |= 2 }
-		if strings.ContainsRune(parts[2], 'k') { p.Castling |= 4 }
-		if strings.ContainsRune(parts[2], 'q') { p.Castling |= 8 }
+		if strings.ContainsRune(parts[2], 'K') {
+			p.Castling |= 1
+		}
+		if strings.ContainsRune(parts[2], 'Q') {
+			p.Castling |= 2
+		}
+		if strings.ContainsRune(parts[2], 'k') {
+			p.Castling |= 4
+		}
+		if strings.ContainsRune(parts[2], 'q') {
+			p.Castling |= 8
+		}
 	}
 
 	// 4. Casa de En Passant
@@ -92,9 +106,94 @@ func FromFEN(fen string) (Position, error) {
 	return p, nil
 }
 
-// FEN reconverte os Bitboards de volta para uma string (útil para debug e testes).
+// fenChars mapeia o tipo da peça para a letra usada no FEN (minúscula = pretas).
+var fenChars = [6]byte{Pawn: 'p', Knight: 'n', Bishop: 'b', Rook: 'r', Queen: 'q', King: 'k'}
+
+// PieceAt devolve o tipo e a cor da peça numa casa. Se a casa estiver vazia,
+// devolve NoPiece (a cor não tem significado nesse caso).
+func (p *Position) PieceAt(sq int) (PieceType, Color) {
+	color := White
+	if p.Colors[Black].Has(sq) {
+		color = Black
+	} else if !p.Colors[White].Has(sq) {
+		return NoPiece, White
+	}
+	for pt := Pawn; pt <= King; pt++ {
+		if p.Pieces[pt].Has(sq) {
+			return pt, color
+		}
+	}
+	return NoPiece, White
+}
+
+// FEN reconverte os Bitboards de volta para uma string FEN padrão.
+// É o inverso de FromFEN: FromFEN(p.FEN()) devolve a mesma posição.
 func (p *Position) FEN() string {
-	// (Deixaremos o gerador reverso vazio por agora, apenas precisamos da assinatura 
-	// para os prints e logs do worker.go não quebrarem).
-	return "fen_gerado_no_futuro"
+	var sb strings.Builder
+
+	// 1. Posicionamento das peças, da linha 8 (índice 7) para a linha 1.
+	for rank := 7; rank >= 0; rank-- {
+		empty := 0
+		for file := 0; file < 8; file++ {
+			pt, color := p.PieceAt(rank*8 + file)
+			if pt == NoPiece {
+				empty++
+				continue
+			}
+			if empty > 0 {
+				sb.WriteString(strconv.Itoa(empty))
+				empty = 0
+			}
+			char := fenChars[pt]
+			if color == White {
+				char -= 'a' - 'A' // maiúscula para as brancas
+			}
+			sb.WriteByte(char)
+		}
+		if empty > 0 {
+			sb.WriteString(strconv.Itoa(empty))
+		}
+		if rank > 0 {
+			sb.WriteByte('/')
+		}
+	}
+
+	// 2. Lado a jogar.
+	if p.SideToMove == White {
+		sb.WriteString(" w ")
+	} else {
+		sb.WriteString(" b ")
+	}
+
+	// 3. Direitos de roque, sempre na ordem KQkq.
+	if p.Castling == 0 {
+		sb.WriteByte('-')
+	} else {
+		for i, flag := range []uint8{1, 2, 4, 8} {
+			if p.Castling&flag != 0 {
+				sb.WriteByte("KQkq"[i])
+			}
+		}
+	}
+
+	// 4. Casa de en passant.
+	sb.WriteByte(' ')
+	if p.EnPassant < 0 || p.EnPassant > 63 {
+		sb.WriteByte('-')
+	} else {
+		sb.WriteByte(byte('a' + p.EnPassant%8))
+		sb.WriteByte(byte('1' + p.EnPassant/8))
+	}
+
+	// 5 e 6. Relógio dos 50 lances e número do lance.
+	fullmove := p.Fullmove
+	if fullmove < 1 {
+		fullmove = 1
+	}
+	sb.WriteByte(' ')
+	sb.WriteString(strconv.Itoa(p.Halfmove))
+	sb.WriteByte(' ')
+	sb.WriteString(strconv.Itoa(fullmove))
+
+	return sb.String()
 }

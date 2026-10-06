@@ -5,7 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
-	
+
 	"github.com/CallMePeterD/chess-ia/rules"
 )
 
@@ -20,6 +20,25 @@ type Entry struct {
 // Book guarda o ficheiro carregado em memória
 type Book struct {
 	entries []Entry
+}
+
+// Len devolve quantos lances o livro carregado contém.
+func (b *Book) Len() int {
+	if b == nil {
+		return 0
+	}
+	return len(b.entries)
+}
+
+// Load abre o livro em path. Quando required é false (o caminho veio do valor
+// padrão, não do utilizador) e o ficheiro não existe, devolve (nil, nil):
+// jogar sem teoria de abertura é aceitável e não é um erro.
+func Load(path string, required bool) (*Book, error) {
+	b, err := Open(path)
+	if err != nil && !required && errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	return b, err
 }
 
 // Open lê o ficheiro binário (Big-Endian) e carrega-o para a memória.
@@ -102,10 +121,14 @@ func decodeMove(m uint16) string {
 	})
 
 	switch promo {
-	case 1: uci += "n"
-	case 2: uci += "b"
-	case 3: uci += "r"
-	case 4: uci += "q"
+	case 1:
+		uci += "n"
+	case 2:
+		uci += "b"
+	case 3:
+		uci += "r"
+	case 4:
+		uci += "q"
 	}
 	return uci
 }
