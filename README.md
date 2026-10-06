@@ -10,7 +10,8 @@ para a IA.
 
 - **Algoritmo:** minimax (busca clássica, não é machine learning).
 - **Avaliação:** material (P=100, C=B=300, T=500, D=900, em centipeões).
-- **Regras:** biblioteca [`notnil/chess`](https://github.com/notnil/chess), isolada no pacote `rules/`.
+- **Regras:** motor próprio de bitboards, isolado no pacote `rules/` e validado por perft.
+- **Aberturas:** livro no formato PolyGlot (`.bin`), opcional — ver a flag `-book`.
 
 > Estado atual: demo parcial. A IA joga lances legais e acha táticas curtas, mas ainda
 > é fraca (só enxerga material). Alfa-beta, ordenação de lances e tabelas de posição vêm a seguir.
@@ -86,6 +87,7 @@ nós:        145 em 3ms
 | `-dificuldade` | — | `facil` (prof. 1), `media` (prof. 2), `dificil` (prof. 3) |
 | `-depth` | `2` | profundidade manual, ignorada se `-dificuldade` for usada |
 | `-perft` | `0` | em vez de buscar, conta posições até essa profundidade |
+| `-book` | `book.bin` | livro de aberturas PolyGlot; se o padrão não existir, joga sem teoria |
 
 Dica: monte qualquer posição no [editor do lichess](https://lichess.org/editor) e copie a FEN.
 
@@ -149,8 +151,32 @@ Encerre com `Ctrl+C`.
 | `IA_TOKEN` (variável) | obrigatória | token compartilhado do canal interno |
 | `-backend` ou `IA_BACKEND_URL` | `http://localhost:8080` | URL base do backend |
 | `-interval` | `750ms` | intervalo de polling quando não há trabalho |
+| `-book` ou `IA_BOOK` | `book.bin` | livro de aberturas PolyGlot (opcional) |
 
 Para usar o **backend real**, basta apontar `-backend` para ele e usar o token combinado.
+
+### Livro de aberturas (opcional)
+
+O livro não é versionado: é um binário grande e com licença própria. Sem ele, a IA calcula
+os primeiros lances pela busca normal — é o comportamento padrão e nada aparece no log.
+Para usar um livro, baixe um `.bin` no formato PolyGlot e aponte o caminho:
+
+```sh
+go run ./harness -book caminho/para/livro.bin -dificuldade media
+IA_BOOK=caminho/para/livro.bin go run ./cmd/worker
+```
+
+Se o caminho for informado e o arquivo não existir, os programas falham com erro, em vez
+de seguir em silêncio.
+
+### Ferramentas de geração (uso raro)
+
+`internal/tools/` guarda geradores que não entram no build normal (etiqueta `tools`):
+
+```sh
+go run -tags tools ./internal/tools/genmagics > rules/magics_data.go   # números mágicos
+go run -tags tools ./internal/tools/polyglotkeys                        # sementes do PolyGlot
+```
 
 ### Gerar executáveis
 
