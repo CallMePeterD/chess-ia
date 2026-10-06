@@ -12,11 +12,10 @@ import (
 	"os"
 	"time"
 
+	"github.com/CallMePeterD/chess-ia/book"
 	"github.com/CallMePeterD/chess-ia/eval"
 	"github.com/CallMePeterD/chess-ia/rules"
 	"github.com/CallMePeterD/chess-ia/search"
-	"github.com/CallMePeterD/chess-ia/book"
-
 )
 
 func main() {
@@ -24,13 +23,22 @@ func main() {
 	depth := flag.Int("depth", 2, "profundidade da busca (ignorada se -dificuldade for usada)")
 	dificuldade := flag.String("dificuldade", "", "facil | media | dificil")
 	perft := flag.Int("perft", 0, "em vez de buscar, roda perft até esta profundidade")
+	bookPath := flag.String("book", "book.bin", "livro de aberturas no formato PolyGlot (opcional)")
 	flag.Parse()
 
-	var err error
-	search.OpeningBook, err = book.Open("book.bin")
+	// O livro é opcional: só é erro se o caminho foi pedido explicitamente.
+	explicit := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "book" {
+			explicit = true
+		}
+	})
+	b, err := book.Load(*bookPath, explicit)
 	if err != nil {
-		fmt.Println("Aviso: Livro de aberturas não encontrado. A jogar sem teoria inicial.")
+		fmt.Fprintf(os.Stderr, "erro: livro de aberturas %q: %v\n", *bookPath, err)
+		os.Exit(1)
 	}
+	search.OpeningBook = b
 
 	if err := run(*fen, *depth, *dificuldade, *perft); err != nil {
 		fmt.Fprintln(os.Stderr, "erro:", err)
@@ -68,7 +76,7 @@ func run(fen string, depth int, dificuldade string, perft int) error {
 	fmt.Printf("avaliação:  %d (estática)\n", eval.Evaluate(pos))
 
 	start := time.Now()
-	res, err := search.Minimax(context.Background(),pos, depth, multiPV)
+	res, err := search.Minimax(context.Background(), pos, depth, multiPV)
 	if err != nil {
 		return err
 	}

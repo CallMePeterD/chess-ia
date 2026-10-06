@@ -1,3 +1,10 @@
+//go:build tools
+
+// Comando polyglotkeys gera book/polyglot_keys.go a partir das sementes
+// originais do PolyGlot, publicadas no projeto python-chess. Só precisa de ser
+// executado se essas constantes se perderem; fica fora do build normal.
+//
+//	go run -tags tools ./internal/tools/polyglotkeys
 package main
 
 import (
@@ -33,6 +40,6 @@ func main() {
 	fmt.Fprintln(out, "var PolyglotRandoms = [781]uint64{")
 	fmt.Fprintln(out, arrayStr)
 	fmt.Fprintln(out, "}")
-	
+
 	fmt.Println("Ficheiro book/polyglot_keys.go gerado com sucesso! Pode apagar o fetch.go.")
 }
