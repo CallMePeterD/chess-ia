@@ -52,9 +52,9 @@ func TestApplyIsImmutable(t *testing.T) {
 	if !ok {
 		t.Fatal("lance e2e4 não encontrado")
 	}
-	
+
 	next := pos.Apply(mv)
-	
+
 	// Como structs em Go são copiadas por valor, Apply nunca deve alterar o pos original
 	if pos.SideToMove != White {
 		t.Errorf("posição original mudou: o turno alterou-se de forma inesperada")
@@ -80,29 +80,29 @@ func TestPromotionUCI(t *testing.T) {
 
 func TestStatus(t *testing.T) {
 	cases := []struct {
-		fen       string
-		isOver    bool
-		isMate    bool
-		isStale   bool
+		fen     string
+		isOver  bool
+		isMate  bool
+		isStale bool
 	}{
 		{StartFEN, false, false, false},
 		{"R5k1/5ppp/8/8/8/8/8/6K1 b - - 0 1", true, true, false}, // Checkmate
 		{"7k/5Q2/6K1/8/8/8/8/8 b - - 0 1", true, false, true},    // Stalemate
 	}
-	
+
 	for _, tc := range cases {
 		pos, err := FromFEN(tc.fen)
 		if err != nil {
 			t.Fatal(err)
 		}
-		
+
 		moves := pos.ValidMoves()
 		over := len(moves) == 0
 		mate := over && pos.InCheck(pos.SideToMove)
 		stale := over && !pos.InCheck(pos.SideToMove)
-		
+
 		if over != tc.isOver || mate != tc.isMate || stale != tc.isStale {
-			t.Errorf("%s: status incorreto. esperado over=%v mate=%v stale=%v, obtido over=%v mate=%v stale=%v", 
+			t.Errorf("%s: status incorreto. esperado over=%v mate=%v stale=%v, obtido over=%v mate=%v stale=%v",
 				tc.fen, tc.isOver, tc.isMate, tc.isStale, over, mate, stale)
 		}
 	}
@@ -111,5 +111,59 @@ func TestStatus(t *testing.T) {
 func TestInvalidFEN(t *testing.T) {
 	if _, err := FromFEN("isso não é fen"); err == nil {
 		t.Error("esperava erro para FEN inválida")
+	}
+}
+
+// TestFENRoundTrip garante que o gerador de FEN é o inverso exato do leitor:
+// ler uma FEN e voltar a escrevê-la tem de devolver a string original.
+func TestFENRoundTrip(t *testing.T) {
+	fens := []string{
+		StartFEN,
+		"r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
+		"8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1",
+		"r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1",
+		"rnbq1k1r/pp1Pbppp/2p5/8/2B5/8/PPP1NnPP/RNBQK2R w KQ - 1 8",
+		"rnbqkbnr/pp1ppppp/8/2p5/4P3/8/PPPP1PPP/RNBQKBNR w KQkq c6 0 2", // en passant
+		"4k3/8/8/8/8/8/8/4K3 b - - 13 47",                               // só reis, relógios altos
+	}
+	for _, want := range fens {
+		pos, err := FromFEN(want)
+		if err != nil {
+			t.Fatalf("%s: %v", want, err)
+		}
+		if got := pos.FEN(); got != want {
+			t.Errorf("ida e volta falhou:\n  original: %s\n  gerada:   %s", want, got)
+		}
+	}
+}
+
+// TestFENAfterMove cobre o caso que quebrava o selfplay do mock: a FEN gerada
+// depois de um lance tem de ser legível de volta.
+func TestFENAfterMove(t *testing.T) {
+	pos, err := FromFEN(StartFEN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mv, ok := parseUCI(pos, "e2e4")
+	if !ok {
+		t.Fatal("lance e2e4 não encontrado")
+	}
+
+	next := pos.Apply(mv)
+	fen := next.FEN()
+
+	reparsed, err := FromFEN(fen)
+	if err != nil {
+		t.Fatalf("FEN gerada não é legível: %q: %v", fen, err)
+	}
+	if reparsed.FEN() != fen {
+		t.Errorf("FEN instável: %q virou %q", fen, reparsed.FEN())
+	}
+	if reparsed.SideToMove != Black {
+		t.Errorf("depois de e2e4 deveria ser a vez das pretas: %q", fen)
+	}
+	if len(reparsed.ValidMoves()) != len(next.ValidMoves()) {
+		t.Errorf("posição reconstruída tem %d lances, a original tem %d",
+			len(reparsed.ValidMoves()), len(next.ValidMoves()))
 	}
 }
