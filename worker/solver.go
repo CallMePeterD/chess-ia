@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"math/bits"
 	"time"
 
 	"github.com/CallMePeterD/chess-ia/rules"
@@ -16,6 +17,19 @@ func SearchSolver(ctx context.Context, job Job) (string, int, error) {
 		return "", 0, err
 	}
 
+	//1. SYZYGY
+	// Somamos os bits de todas as peças Brancas e Pretas
+	numPecas := bits.OnesCount64(uint64(pos.Colors[rules.White] | pos.Colors[rules.Black]))
+	
+	if numPecas <= 7 {
+		if bestMove, ok := search.ProbeCloudTablebase(job.FEN); ok {
+			// Devolvemos um Score altíssimo para o backend perceber que é lance de Tablebase
+			return bestMove, search.MateScore - 100, nil
+		}
+	}
+	// ------------------------------------------------
+
+	// 2. Transição normal para a IA de meio-jogo
 	depth, err := search.DepthFor(job.Dificuldade)
 	if err != nil {
 		return "", 0, err
@@ -25,22 +39,20 @@ func SearchSolver(ctx context.Context, job Job) (string, int, error) {
 		return "", 0, err
 	}
 
-	// 1. Define o tempo disponível para pensar neste lance.
+	// 3. Gestão de Tempo
 	timeout := 3 * time.Second
 	if job.Dificuldade == "mestre" {
 		timeout = 10 * time.Second 
 	}
 
-	// 2. Deriva um contexto com cronómetro a partir do contexto principal do Worker
 	searchCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// 3. Executa a busca passando o contexto com prazo de validade
+	// 4. Executa o motor Minimax normal
 	res, err := search.Minimax(searchCtx, pos, depth, multiPV)
 	if err != nil {
 		return "", 0, err
 	}
 
-	// 4. Devolve exatamente as três variáveis que a interface Solver exige
 	return res.Move.UCI(), res.Score, nil
 }
