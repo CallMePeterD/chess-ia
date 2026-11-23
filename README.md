@@ -128,8 +128,8 @@ Com `-selfplay`, a IA joga contra si mesma e o mock mostra cada lance aceito:
 
 ```
 mock do backend em :8080
-selfplay req-1: b1a3  (avaliação 0)
-selfplay req-2: b8a6  (avaliação 0)
+selfplay job-1 (rev 1): b1a3
+selfplay job-2 (rev 2): b8a6
 ...
 ```
 
@@ -141,7 +141,7 @@ Encerre com `Ctrl+C`.
 |---|---|---|
 | `-addr` | `:8080` | endereço de escuta |
 | `-selfplay` | `false` | a IA joga uma partida contra si mesma; sem a flag, entrega 3 posições de exemplo |
-| `-dificuldade` | `media` | dificuldade dos pedidos gerados |
+| `-budget` | `1000` | `timeBudgetMs` enviado nos trabalhos gerados |
 | `-plies` | `40` | limite de meios-lances no selfplay |
 
 **Worker (`cmd/worker`)**
@@ -150,6 +150,7 @@ Encerre com `Ctrl+C`.
 |---|---|---|
 | `IA_TOKEN` (variável) | obrigatória | token compartilhado do canal interno |
 | `-backend` ou `IA_BACKEND_URL` | `http://localhost:8080` | URL base do backend |
+| `-worker-id` ou `IA_WORKER_ID` | `worker-1` | identificador deste worker no contrato |
 | `-interval` | `750ms` | intervalo de polling quando não há trabalho |
 | `-book` ou `IA_BOOK` | `book.bin` | livro de aberturas PolyGlot (opcional) |
 
@@ -188,34 +189,47 @@ go build -o bin/ ./cmd/worker ./cmd/mockbackend ./harness
 
 ## Contrato com o backend
 
-A IA consome dois endpoints, sempre com `Authorization: Bearer <token>`.
+Implementa o **contrato Backend-IA v1** (`docs/contracts/backend-ai.md` no repositório do
+backend). A IA fornece apenas um movimento **candidato**: estado, relógio, revisão,
+legalidade e conclusão da partida são do backend. Ambas as chamadas são `POST` com
+`Content-Type: application/json` e `Authorization: Bearer <token>`.
 
-**`GET /internal/v1/moves/next`**: pega trabalho pendente
+**`POST /v1/ai/jobs/next`**: pede trabalho
+
+Corpo: `{ "workerId" }`
 
 | Status | Significado |
 |---|---|
 | `204` | nada a calcular (a IA espera e tenta de novo) |
-| `200` | `{ "gameId", "requestId", "fen", "dificuldade" }` |
+| `200` | `{ "jobId", "gameId", "revision", "position": { "fen", "sideToMove" }, "timeBudgetMs", "expiresAt" }` |
 
-**`POST /internal/v1/moves/result`**: entrega o lance
+**`POST /v1/ai/jobs/result`**: entrega o candidato
 
-Corpo: `{ "gameId", "requestId", "move", "avaliacao" }`
+Corpo: `{ "workerId", "jobId", "gameId", "revision", "uci" }`
+Resposta `200`: `{ "status": "APPLIED", "gameId", "revision" }`
 
-| Status | Significado | O que a IA faz |
+Erros têm corpo `{ "code", "message" }`:
+
+| Status | Códigos | O que a IA faz |
 |---|---|---|
-| `200` | aceito | segue para o próximo |
-| `409` | `requestId` já resolvido/expirado | descarta |
-| `422` | lance inválido | registra no log |
-| `401`/`403` | token recusado | encerra o worker |
-| `5xx` / erro de rede | falha transitória | tenta de novo, esperando cada vez mais |
+| `200` | — | segue para o próximo |
+| `400` | `VALIDATION_ERROR`, `INVALID_CANDIDATE` | registra no log e descarta |
+| `404` | `JOB_NOT_FOUND` | descarta e volta a pedir trabalho |
+| `409` | `JOB_EXPIRED`, `STALE_REVISION`, `JOB_ALREADY_COMPLETED`, `WORKER_OWNERSHIP_CONFLICT` | descarta e volta a pedir trabalho |
+| `422` | `ILLEGAL_MOVE`, `INVALID_GAME_STATE` | registra no log e descarta |
+| `401`/`403` | — | encerra o worker |
+| `5xx` / erro de rede | — | tenta de novo, esperando cada vez mais |
 
 Convenções:
 
-- `move` em UCI; `dificuldade` ∈ `facil`, `media`, `dificil`.
-- `avaliacao` em centipeões, do ponto de vista das **brancas** (positivo = brancas melhor).
-  Mate vale ±(100000 − distância em meios-lances).
-- Se a posição não tem lance legal (mate/afogamento) ou a dificuldade é desconhecida,
-  a IA **não envia resultado**; o backend deve expirar o `requestId`.
+- `uci` no formato UCI (`e2e4`, `e7e8q`).
+- `timeBudgetMs` é o orçamento de tempo do lance. A IA reserva uma margem de 15% para a
+  entrega e escolhe a profundidade a partir do que sobra (`worker.LevelFor`):
+  `< 400ms` fácil, `< 1500ms` média, `< 5000ms` difícil, acima disso mestre.
+- Reenvio idêntico de um resultado já aplicado devolve o mesmo `200`; um candidato
+  diferente para trabalho concluído recebe `JOB_ALREADY_COMPLETED`.
+- Se a posição não tem lance legal (mate/afogamento), a IA **não envia resultado**; o
+  backend expira o trabalho.
 
 O [`mock/mock.go`](mock/mock.go) é uma implementação de referência desse comportamento.
 
@@ -226,9 +240,9 @@ O [`mock/mock.go`](mock/mock.go) é uma implementação de referência desse com
 ```
 rules/            adaptador de regras (único pacote que usa notnil/chess) + perft
 eval/             função de avaliação
-search/           minimax, mapeamento dificuldade → profundidade
+search/           minimax, mapeamento nível → profundidade
 worker/           cliente do contrato: polling, POST, token, retry
-mock/             endpoints simulados do backend
+mock/             endpoints do contrato v1 simulados
 harness/          CLI: FEN → lance, perft
 cmd/worker/       executável do worker
 cmd/mockbackend/  executável do mock
