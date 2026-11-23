@@ -1,6 +1,6 @@
 // Comando worker: laço de polling contra o backend (ou o mock).
 //
-//	IA_TOKEN=segredo go run ./cmd/worker -backend http://localhost:8080
+//	IA_TOKEN=segredo go run ./cmd/worker -backend http://localhost:8080 -worker-id worker-1
 package main
 
 import (
@@ -19,6 +19,7 @@ import (
 
 func main() {
 	backend := flag.String("backend", envOr("IA_BACKEND_URL", "http://localhost:8080"), "URL base do backend")
+	workerID := flag.String("worker-id", envOr("IA_WORKER_ID", "worker-1"), "identificador deste worker no contrato Backend-IA")
 	interval := flag.Duration("interval", 750*time.Millisecond, "intervalo de polling quando não há trabalho")
 	bookPath := flag.String("book", envOr("IA_BOOK", "book.bin"), "livro de aberturas no formato PolyGlot (opcional)")
 	flag.Parse()
@@ -43,8 +44,8 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	logger.Printf("conectando em %s", *backend)
-	err = worker.Run(ctx, worker.NewClient(*backend, token), worker.SearchSolver,
+	logger.Printf("conectando em %s como %s", *backend, *workerID)
+	err = worker.Run(ctx, worker.NewClient(*backend, *workerID, token), worker.SearchSolver,
 		worker.Config{PollInterval: *interval, Logger: logger})
 	if errors.Is(err, worker.ErrUnauthorized) {
 		logger.Fatal("token recusado pelo backend; confira IA_TOKEN")

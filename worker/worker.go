@@ -1,6 +1,11 @@
-// Package worker é o cliente que conversa com o backend (contrato worker):
-// faz polling em GET /internal/v1/moves/next, calcula o lance e entrega em
-// POST /internal/v1/moves/result.
+// Package worker é o cliente que conversa com o backend (contrato Backend-IA
+// v1, documentado em docs/contracts/backend-ai.md do repositório do backend):
+// pede trabalho em POST /v1/ai/jobs/next, calcula o lance e entrega o
+// candidato em POST /v1/ai/jobs/result.
+//
+// O worker fornece apenas um movimento candidato. Estado, relógio, revisão,
+// legalidade e conclusão da partida continuam sendo responsabilidade do
+// backend.
 package worker
 
 import (
@@ -17,54 +22,111 @@ import (
 )
 
 const (
-	PathNext   = "/internal/v1/moves/next"
-	PathResult = "/internal/v1/moves/result"
+	PathNext   = "/v1/ai/jobs/next"
+	PathResult = "/v1/ai/jobs/result"
 )
+
+// Position é a posição enviada pelo backend.
+type Position struct {
+	FEN        string `json:"fen"`
+	SideToMove string `json:"sideToMove"`
+}
 
 // Job é um pedido de lance vindo do backend.
 type Job struct {
-	GameID      string `json:"gameId"`
-	RequestID   string `json:"requestId"`
-	FEN         string `json:"fen"`
-	Dificuldade string `json:"dificuldade"`
+	JobID        string    `json:"jobId"`
+	GameID       string    `json:"gameId"`
+	Revision     int64     `json:"revision"`
+	Position     Position  `json:"position"`
+	TimeBudgetMs int       `json:"timeBudgetMs"`
+	ExpiresAt    time.Time `json:"expiresAt"`
 }
 
-// Result é o lance calculado, entregue ao backend.
+// nextRequest é o corpo enviado a /v1/ai/jobs/next.
+type nextRequest struct {
+	WorkerID string `json:"workerId"`
+}
+
+// Result é o candidato entregue ao backend.
 type Result struct {
-	GameID    string `json:"gameId"`
-	RequestID string `json:"requestId"`
-	Move      string `json:"move"`
-	Avaliacao int    `json:"avaliacao"`
+	WorkerID string `json:"workerId"`
+	JobID    string `json:"jobId"`
+	GameID   string `json:"gameId"`
+	Revision int64  `json:"revision"`
+	UCI      string `json:"uci"`
+}
+
+// Ack é a resposta 200 de /v1/ai/jobs/result.
+type Ack struct {
+	Status   string `json:"status"`
+	GameID   string `json:"gameId"`
+	Revision int64  `json:"revision"`
+}
+
+// Códigos de erro do contrato.
+const (
+	CodeValidationError   = "VALIDATION_ERROR"
+	CodeInvalidCandidate  = "INVALID_CANDIDATE"
+	CodeJobNotFound       = "JOB_NOT_FOUND"
+	CodeJobExpired        = "JOB_EXPIRED"
+	CodeStaleRevision     = "STALE_REVISION"
+	CodeJobAlreadyDone    = "JOB_ALREADY_COMPLETED"
+	CodeOwnershipConflict = "WORKER_OWNERSHIP_CONFLICT"
+	CodeIllegalMove       = "ILLEGAL_MOVE"
+	CodeInvalidGameState  = "INVALID_GAME_STATE"
+)
+
+// APIError carrega o corpo {"code","message"} devolvido pelo backend.
+// Use errors.As para ler o código.
+type APIError struct {
+	StatusCode int
+	Code       string `json:"code"`
+	Message    string `json:"message"`
+}
+
+func (e *APIError) Error() string {
+	if e.Message != "" {
+		return fmt.Sprintf("status %d: %s: %s", e.StatusCode, e.Code, e.Message)
+	}
+	return fmt.Sprintf("status %d: %s", e.StatusCode, e.Code)
 }
 
 var (
-	// ErrConflict: requestId já resolvido ou expirado (409). Descartar.
-	ErrConflict = errors.New("requestId já resolvido ou expirado")
-	// ErrInvalidMove: o backend recusou o lance (422).
-	ErrInvalidMove = errors.New("lance recusado pelo backend")
+	// ErrJobGone: o trabalho não vale mais (404, ou 409 por expiração,
+	// revisão vencida, conclusão anterior ou posse de outro worker).
+	// O worker descarta o trabalho local e volta a pedir em /next.
+	ErrJobGone = errors.New("trabalho não é mais válido")
+	// ErrInvalidCandidate: o backend recusou o candidato (400 ou 422).
+	ErrInvalidCandidate = errors.New("candidato recusado pelo backend")
 	// ErrUnauthorized: token ausente ou inválido (401/403). Não adianta repetir.
 	ErrUnauthorized = errors.New("token recusado pelo backend")
 )
 
 // Client fala HTTP com o backend.
 type Client struct {
-	BaseURL string
-	Token   string
-	HTTP    *http.Client
+	BaseURL  string
+	WorkerID string
+	Token    string
+	HTTP     *http.Client
 }
 
 // NewClient cria um cliente com timeout razoável.
-func NewClient(baseURL, token string) *Client {
+func NewClient(baseURL, workerID, token string) *Client {
 	return &Client{
-		BaseURL: strings.TrimRight(baseURL, "/"),
-		Token:   token,
-		HTTP:    &http.Client{Timeout: 10 * time.Second},
+		BaseURL:  strings.TrimRight(baseURL, "/"),
+		WorkerID: workerID,
+		Token:    token,
+		HTTP:     &http.Client{Timeout: 10 * time.Second},
 	}
 }
 
-// Next busca trabalho pendente. Devolve (nil, nil) quando não há nada (204).
+// Next pede trabalho pendente. Devolve (nil, nil) quando não há nada (204).
 func (c *Client) Next(ctx context.Context) (*Job, error) {
-	resp, err := c.do(ctx, http.MethodGet, PathNext, nil)
+	body, err := json.Marshal(nextRequest{WorkerID: c.WorkerID})
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.do(ctx, PathNext, body)
 	if err != nil {
 		return nil, err
 	}
@@ -76,63 +138,74 @@ func (c *Client) Next(ctx context.Context) (*Job, error) {
 	case http.StatusOK:
 		var job Job
 		if err := json.NewDecoder(resp.Body).Decode(&job); err != nil {
-			return nil, fmt.Errorf("resposta de /next inválida: %w", err)
+			return nil, fmt.Errorf("resposta de %s inválida: %w", PathNext, err)
 		}
 		return &job, nil
 	}
 	return nil, statusError(resp)
 }
 
-// Submit entrega o resultado. Erros: ErrConflict, ErrInvalidMove,
+// Submit entrega o candidato. Erros: ErrJobGone, ErrInvalidCandidate,
 // ErrUnauthorized ou falha transitória (rede / 5xx), que vale repetir.
-func (c *Client) Submit(ctx context.Context, r Result) error {
+func (c *Client) Submit(ctx context.Context, r Result) (*Ack, error) {
+	if r.WorkerID == "" {
+		r.WorkerID = c.WorkerID
+	}
 	body, err := json.Marshal(r)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	resp, err := c.do(ctx, http.MethodPost, PathResult, body)
+	resp, err := c.do(ctx, PathResult, body)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer resp.Body.Close()
 
-	switch resp.StatusCode {
-	case http.StatusOK:
-		return nil
-	case http.StatusConflict:
-		return ErrConflict
-	case http.StatusUnprocessableEntity:
-		return ErrInvalidMove
+	if resp.StatusCode == http.StatusOK {
+		var ack Ack
+		if err := json.NewDecoder(resp.Body).Decode(&ack); err != nil {
+			return nil, fmt.Errorf("resposta de %s inválida: %w", PathResult, err)
+		}
+		return &ack, nil
 	}
-	return statusError(resp)
+	return nil, statusError(resp)
 }
 
-func (c *Client) do(ctx context.Context, method, path string, body []byte) (*http.Response, error) {
-	var rd io.Reader
-	if body != nil {
-		rd = bytes.NewReader(body)
-	}
-	req, err := http.NewRequestWithContext(ctx, method, c.BaseURL+path, rd)
+func (c *Client) do(ctx context.Context, path string, body []byte) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+path, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.Token)
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
+	req.Header.Set("Content-Type", "application/json")
 	return c.HTTP.Do(req)
 }
 
+// statusError traduz a resposta de erro do backend. Mantém o APIError
+// embrulhado, para que errors.As recupere o código do contrato.
 func statusError(resp *http.Response) error {
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		return ErrUnauthorized
 	}
-	msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-	return fmt.Errorf("%s: status %d: %s", resp.Request.URL.Path, resp.StatusCode, bytes.TrimSpace(msg))
+
+	apiErr := &APIError{StatusCode: resp.StatusCode}
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+	_ = json.Unmarshal(raw, apiErr) // corpo fora do contrato: segue com Code vazio
+	if apiErr.Code == "" {
+		apiErr.Message = string(bytes.TrimSpace(raw))
+	}
+
+	switch resp.StatusCode {
+	case http.StatusNotFound, http.StatusConflict:
+		return fmt.Errorf("%w: %w", ErrJobGone, apiErr)
+	case http.StatusBadRequest, http.StatusUnprocessableEntity:
+		return fmt.Errorf("%w: %w", ErrInvalidCandidate, apiErr)
+	}
+	return apiErr
 }
 
 // Solver calcula o lance (UCI) e a avaliação para um pedido.
-type Solver func(ctx context.Context, job Job) (move string, avaliacao int, err error)
+type Solver func(ctx context.Context, job Job) (uci string, avaliacao int, err error)
 
 // Config controla o laço de polling.
 type Config struct {
@@ -177,7 +250,7 @@ func Run(ctx context.Context, c *Client, solve Solver, cfg Config) error {
 		case err != nil:
 			backoff = nextBackoff(backoff, cfg.PollInterval, cfg.MaxBackoff)
 			wait = backoff
-			lg.Printf("erro em /next: %v (nova tentativa em %s)", err, wait)
+			lg.Printf("erro em %s: %v (nova tentativa em %s)", PathNext, err, wait)
 		case job != nil:
 			backoff = 0
 			if err := handle(ctx, c, solve, cfg, *job); errors.Is(err, ErrUnauthorized) {
@@ -199,35 +272,45 @@ func Run(ctx context.Context, c *Client, solve Solver, cfg Config) error {
 func handle(ctx context.Context, c *Client, solve Solver, cfg Config, job Job) error {
 	lg := cfg.Logger
 	start := time.Now()
-	move, score, err := solve(ctx, job)
+	uci, score, err := solve(ctx, job)
 	if err != nil {
-		// Sem lance para entregar; o backend expira o requestId.
-		lg.Printf("game=%s req=%s: não foi possível calcular: %v", job.GameID, job.RequestID, err)
+		// Sem lance para entregar; o backend expira o trabalho.
+		lg.Printf("game=%s job=%s: não foi possível calcular: %v", job.GameID, job.JobID, err)
 		return nil
 	}
-	lg.Printf("game=%s req=%s: %s (%d) em %s", job.GameID, job.RequestID, move, score, time.Since(start).Round(time.Millisecond))
+	lg.Printf("game=%s job=%s rev=%d: %s (%d) em %s",
+		job.GameID, job.JobID, job.Revision, uci, score, time.Since(start).Round(time.Millisecond))
 
-	res := Result{GameID: job.GameID, RequestID: job.RequestID, Move: move, Avaliacao: score}
+	res := Result{
+		WorkerID: c.WorkerID,
+		JobID:    job.JobID,
+		GameID:   job.GameID,
+		Revision: job.Revision,
+		UCI:      uci,
+	}
 	backoff := time.Duration(0)
 	for attempt := 0; ; attempt++ {
-		err := c.Submit(ctx, res)
+		ack, err := c.Submit(ctx, res)
 		switch {
 		case err == nil:
+			lg.Printf("job=%s: %s (revisão %d)", job.JobID, ack.Status, ack.Revision)
 			return nil
-		case errors.Is(err, ErrConflict):
-			lg.Printf("req=%s: 409, descartado", job.RequestID)
+		case errors.Is(err, ErrJobGone):
+			// Expirado, revisão vencida, já concluído ou de outro worker:
+			// descarta e volta a pedir trabalho.
+			lg.Printf("job=%s: descartado (%v)", job.JobID, err)
 			return nil
-		case errors.Is(err, ErrInvalidMove):
-			lg.Printf("req=%s: 422, backend recusou %s", job.RequestID, move)
+		case errors.Is(err, ErrInvalidCandidate):
+			lg.Printf("job=%s: backend recusou %s (%v)", job.JobID, uci, err)
 			return nil
 		case errors.Is(err, ErrUnauthorized), ctx.Err() != nil:
 			return err
 		case attempt >= cfg.SubmitRetries:
-			lg.Printf("req=%s: desistindo após %d tentativas: %v", job.RequestID, attempt+1, err)
+			lg.Printf("job=%s: desistindo após %d tentativas: %v", job.JobID, attempt+1, err)
 			return err
 		}
 		backoff = nextBackoff(backoff, cfg.PollInterval, cfg.MaxBackoff)
-		lg.Printf("req=%s: erro no POST: %v (nova tentativa em %s)", job.RequestID, err, backoff)
+		lg.Printf("job=%s: erro no POST: %v (nova tentativa em %s)", job.JobID, err, backoff)
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
