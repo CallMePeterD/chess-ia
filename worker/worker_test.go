@@ -230,7 +230,8 @@ func TestLevelFor(t *testing.T) {
 		budgetMs int
 		quer     string
 	}{
-		{0, "media"}, {200, "facil"}, {1000, "media"}, {3000, "dificil"}, {10000, "mestre"},
+		{0, "media"}, {200, "facil"}, {1000, "media"}, {2000, "dificil"},
+		{2999, "dificil"}, {3000, "mestre"}, {10000, "mestre"},
 	}
 	for _, c := range casos {
 		if got := worker.LevelFor(c.budgetMs); got != c.quer {
