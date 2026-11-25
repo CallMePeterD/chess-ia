@@ -18,6 +18,13 @@ const budgetMargin = 0.15
 // LevelFor escolhe o nível de busca a partir do orçamento de tempo do job.
 // O contrato Backend-IA v1 não envia dificuldade: envia timeBudgetMs, e é o
 // orçamento que define quão fundo dá para procurar.
+//
+// Os níveis de profundidade fixa (fácil, média, difícil) terminam o
+// aprofundamento e devolvem o lance, mesmo que sobre orçamento: num orçamento
+// de 3,5 s, "difícil" responde em milissegundos e devolve quase todo o tempo
+// sem usar. Só "mestre" aprofunda até o prazo acabar. O corte foi baixado de
+// 5000 para 3000 ms para que um orçamento a partir de três segundos seja de
+// fato gasto pensando, em vez de ser devolvido.
 func LevelFor(budgetMs int) string {
 	switch {
 	case budgetMs <= 0:
@@ -26,7 +33,7 @@ func LevelFor(budgetMs int) string {
 		return "facil"
 	case budgetMs < 1500:
 		return "media"
-	case budgetMs < 5000:
+	case budgetMs < 3000:
 		return "dificil"
 	default:
 		return "mestre"

@@ -225,7 +225,7 @@ Convenções:
 - `uci` no formato UCI (`e2e4`, `e7e8q`).
 - `timeBudgetMs` é o orçamento de tempo do lance. A IA reserva uma margem de 15% para a
   entrega e escolhe a profundidade a partir do que sobra (`worker.LevelFor`):
-  `< 400ms` fácil, `< 1500ms` média, `< 5000ms` difícil, acima disso mestre.
+  `< 400ms` fácil, `< 1500ms` média, `< 3000ms` difícil, acima disso mestre. Os três primeiros têm profundidade fixa e devolvem o lance assim que terminam; só mestre aprofunda até o prazo acabar, então é a partir de 3000ms que o orçamento é realmente gasto pensando.
 - Reenvio idêntico de um resultado já aplicado devolve o mesmo `200`; um candidato
   diferente para trabalho concluído recebe `JOB_ALREADY_COMPLETED`.
 - Se a posição não tem lance legal (mate/afogamento), a IA **não envia resultado**; o
